@@ -1,6 +1,7 @@
 from unittest import TestCase
 from main import CallbackWSGIApplication, SpawningWSGIServer
 import gevent
+import urllib
 
 
 class ListenerTest(TestCase):
@@ -21,12 +22,13 @@ class ListenerTest(TestCase):
             response.write('Hello ' + path.replace('/', ' '))
             return request
 
-        paths = ('/world/', '/world2/')
-        jobs = [self.app.register_listener(path, listener) for path in paths]
-        gevent.joinall(jobs, 10)  # Visit both http://localhost:8080/world/ and http://localhost:8080/world/ within
-                                  # 10 secs, otherwise the test will fail
+        paths = ('/world/', '/world2/', '/world/')
+        jobs = [self.app.add_listener(path, listener) for path in paths]
+        req_jobs = [gevent.spawn(urllib.urlopen, 'http://localhost:8080' + path) for path in paths]
+        gevent.joinall(jobs + req_jobs, 10)  # Timeout after 10 secs if HTTP requests were not received.
 
         for job, path in zip(jobs, paths):
+            self.assertTrue(job.ready())
             request = job.value
-            self.assertIsNotNone(request)  # Fails if endpoint was not visited
+            self.assertIsNotNone(request, '%s was not called' % path)  # Fails if endpoint was not visited
             self.assertEqual(request.path, path)

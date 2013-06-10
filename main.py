@@ -4,6 +4,8 @@ Usage: Start script, then use you web browser, wget, etc. to visit:
     http://localhost:8080/world2/
 """
 
+from gevent.monkey import patch_all
+patch_all()
 import gevent
 from gevent import wsgi
 from gevent.event import AsyncResult
@@ -43,10 +45,11 @@ class ListenerRouter(object):
 
     def dispatch(self, request, response):
         path = urllib.unquote(request.path)
-        if not request.app.listeners.has_key(path):
+        queue = request.app.listeners.get(path)
+        if not queue:  # is queue None or empty?
             response.clear()
             return response  # May instead raise HTTPNotFound here
-        listener, async_result = request.app.listeners.pop(path)
+        listener, async_result = queue.pop(0)
         res = listener(request, response, path)
         print "SETTING VALUE"
         async_result.set(res)
@@ -66,9 +69,12 @@ class CallbackWSGIApplication(webapp2.WSGIApplication):
     def spawn(cls, hostport):
         return gevent.spawn()
 
-    def register_listener(self, path, listener):
+    def add_listener(self, path, listener):
         async_result = AsyncResult()
-        self.listeners[path] = (listener, async_result)
+        queue = self.listeners.get(path)
+        if queue is None:
+            self.listeners[path] = queue = []
+        queue.append((listener, async_result))
 
         def get_res():
             print "LISTENING TO:", path
@@ -105,8 +111,8 @@ if __name__ == '__main__':
             response.write('Hello ' + path.replace('/', ' '))
             return request
 
-        world_job = application.register_listener('/world/', listener)
-        world2_job = application.register_listener('/world2/', listener)
+        world_job = application.add_listener('/world/', listener)
+        world2_job = application.add_listener('/world2/', listener)
 
         gevent.joinall((world_job, world2_job))  # Blocking until GET has been called on both '/world/' and '/world2/'
         print "RES 1:", world_job.value
