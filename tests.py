@@ -22,8 +22,13 @@ class ListenerTest(TestCase):
             response.write('Hello ' + path.replace('/', ' '))
             return request
 
+	def other_listener(request, response, path):
+	    response.write('Foo' + path.replace('/', ' '))
+	    return request
+
         paths = ('/world/', '/world2/', '/world/')
-        listener_jobs = [self.app.add_listener(path, listener) for path in paths]
+	listeners = (listener, listener, other_listener)
+        listener_jobs = [self.app.add_listener(path, l) for path, l in zip(paths, listeners)]
         request_jobs = [gevent.spawn(urllib.urlopen, 'http://localhost:8080' + path) for path in paths]
         gevent.joinall(listener_jobs + request_jobs, 10)  # Timeout after 10 secs if HTTP requests were not received.
 
