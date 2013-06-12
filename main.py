@@ -3,14 +3,14 @@ Usage: Start script, then use you web browser, wget, etc. to visit:
     http://localhost:8080/world/
     http://localhost:8080/world2/
 """
-
-from gevent.monkey import patch_all
-patch_all()
+from gevent.monkey import patch_socket
+patch_socket()
+import logging
 import gevent
+import webapp2
 from gevent import wsgi
 from gevent.event import AsyncResult
-import urllib
-import webapp2
+from webob import exc
 
 
 class EventLoopRequestContext(webapp2.RequestContext):
@@ -36,7 +36,16 @@ class EventLoopRequestContext(webapp2.RequestContext):
         pass
 
 
-class ListenerRouter(object):
+class ListenerRoute(webapp2.Route):
+    def __init__(self, template, handler, async_result, methods=None, schemes=None):
+        super(ListenerRoute, self).__init__(template, handler=handler, methods=methods, schemes=schemes)
+        self.async_result = async_result
+
+    def set_async_result(self, result):
+        self.async_result.set(result)
+
+
+class ListenerRouter(webapp2.Router):
     """
     A faster Router that looks up a static path definition in a dict instead of iterating through webapp routes.
     """
@@ -44,21 +53,31 @@ class ListenerRouter(object):
         pass
 
     def dispatch(self, request, response):
-        path = urllib.unquote(request.path)
-        queue = request.app.listeners.get(path)
-        if not queue:  # is queue None or empty?
-            response.clear()
-            return response  # May instead raise HTTPNotFound here
-        listener, async_result = queue.pop(0)
-        res = listener(request, response, path)
-        print "SETTING VALUE"
-        async_result.set(res)
-        print "COMPLETING RESPONSE"
+        route, route_args, route_kwargs = self.match(request)
+        res = route.handler(request, response, *route_args, **route_kwargs)
+        route.set_async_result(res)
         return response
+
+    def match(self, request):
+        routes = request.app.routes
+        method_not_allowed = False
+        for n, route in enumerate(routes):
+            try:
+                match = route.match(request)
+                if match:
+                    routes.pop(n)
+                    return match
+            except exc.HTTPMethodNotAllowed:
+                method_not_allowed = True
+
+        if method_not_allowed:
+            raise exc.HTTPMethodNotAllowed()
+
+        raise exc.HTTPNotFound()
 
 
 class CallbackWSGIApplication(webapp2.WSGIApplication):
-    listeners = {}
+    routes = []
     request_context_class = EventLoopRequestContext
     router_class = ListenerRouter
 
@@ -69,20 +88,17 @@ class CallbackWSGIApplication(webapp2.WSGIApplication):
     def spawn(cls, hostport):
         return gevent.spawn()
 
-    def add_listener(self, path, listener):
+    def add_listener(self, path, listener, methods=None, schemes=None):
         async_result = AsyncResult()
-        queue = self.listeners.get(path)
-        if queue is None:
-            self.listeners[path] = queue = []
-        queue.append((listener, async_result))
+        self.routes.append((ListenerRoute(path, listener, async_result, methods=methods, schemes=schemes)))
 
         def get_res():
-            print "LISTENING TO:", path
+            logging.debug("LISTENING TO: %s" % path)
             res = async_result.get()  # This will block until async_result.set() has been called some other place
-            print "GOT REQUEST ON:", path
+            logging.debug("GOT REQUEST ON: %s" % path)
             gevent.sleep()  # Yield control to event-loop so that the CallbackWSGIApplication is
                             # able to receive the next request
-            print "WAKING"
+            logging.debug("WAKING %s" % path)
             return res
         return gevent.spawn(get_res)
 
@@ -105,10 +121,9 @@ if __name__ == '__main__':
     server = SpawningWSGIServer(('', 8080), application)
     try:
         server.serve_forever()
-        print "SPAWNED SERVER"
 
-        def listener(request, response, path):
-            response.write('Hello ' + path.replace('/', ' '))
+        def listener(request, response):
+            response.write('Hello ' + request.path.replace('/', ' '))
             return request
 
         world_job = application.add_listener('/world/', listener)

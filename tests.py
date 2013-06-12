@@ -1,5 +1,6 @@
 from unittest import TestCase
-from main import CallbackWSGIApplication, SpawningWSGIServer
+from main import CallbackWSGIApplication
+from main import SpawningWSGIServer
 import gevent
 import urllib
 
@@ -18,22 +19,22 @@ class ListenerTest(TestCase):
         cls.server.stop()
 
     def test_world_and_world2_is_called(self):
-        def listener(request, response, path):
-            response.write('Hello ' + path.replace('/', ' '))
-            return request
+        def listener(request, response, id):
+            response.write('Hello ' + id)
+            return id
 
-	def other_listener(request, response, path):
-	    response.write('Foo' + path.replace('/', ' '))
-	    return request
+        def other_listener(request, response, id):
+            response.write('Foo' + id)
+            return id
 
-        paths = ('/world/', '/world2/', '/world/')
-	listeners = (listener, listener, other_listener)
-        listener_jobs = [self.app.add_listener(path, l) for path, l in zip(paths, listeners)]
-        request_jobs = [gevent.spawn(urllib.urlopen, 'http://localhost:8080' + path) for path in paths]
+        ids = ('world', 'world2', 'world')
+        listeners = (listener, listener, other_listener)
+        listener_jobs = [self.app.add_listener('/<id:%s>/' % id, l) for id, l in zip(ids, listeners)]
+        request_jobs = [gevent.spawn(urllib.urlopen, 'http://localhost:8080/%s/' % id) for id in ids]
         gevent.joinall(listener_jobs + request_jobs, 10)  # Timeout after 10 secs if HTTP requests were not received.
 
-        for job, path in zip(listener_jobs, paths):
+        for job, id in zip(listener_jobs, ids):
             self.assertTrue(job.ready())
-            request = job.value
-            self.assertIsNotNone(request, '%s was not called' % path)  # Fails if endpoint was not visited
-            self.assertEqual(request.path, path)
+            id = job.value
+            self.assertIsNotNone(id, '%s was not called' % id)  # Fails if endpoint was not visited
+            self.assertEqual(id, id)
