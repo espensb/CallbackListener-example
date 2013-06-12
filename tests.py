@@ -23,11 +23,11 @@ class ListenerTest(TestCase):
             return request
 
         paths = ('/world/', '/world2/', '/world/')
-        jobs = [self.app.add_listener(path, listener) for path in paths]
-        req_jobs = [gevent.spawn(urllib.urlopen, 'http://localhost:8080' + path) for path in paths]
-        gevent.joinall(jobs + req_jobs, 10)  # Timeout after 10 secs if HTTP requests were not received.
+        listener_jobs = [self.app.add_listener(path, listener) for path in paths]
+        request_jobs = [gevent.spawn(urllib.urlopen, 'http://localhost:8080' + path) for path in paths]
+        gevent.joinall(listener_jobs + request_jobs, 10)  # Timeout after 10 secs if HTTP requests were not received.
 
-        for job, path in zip(jobs, paths):
+        for job, path in zip(listener_jobs, paths):
             self.assertTrue(job.ready())
             request = job.value
             self.assertIsNotNone(request, '%s was not called' % path)  # Fails if endpoint was not visited
